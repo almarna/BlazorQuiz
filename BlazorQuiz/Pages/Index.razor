@@ -1,0 +1,130 @@
+﻿@page "/"
+@using BlazorQuiz.Client
+@using BlazorQuiz.Server
+@using BlazorQuiz.Services
+@inject IWampService wampService
+@inject IBlazorQuizServer blazorQuizServer;
+
+<h1>Quiz</h1>
+@switch (CurrentPlayerStatus)
+{
+    case PlayerStatus.none:
+        <input type="text" @bind="Name" />
+        <button class="btn btn-primary" @onclick="SetHost">Host</button>
+        <button class="btn btn-primary" @onclick="AddPlayer">Player</button>
+        break;
+    case PlayerStatus.host:
+        <p>You are host</p>
+        <button class="btn btn-primary" @onclick="StartGame">Start game</button>
+        break;
+    case PlayerStatus.guest:
+        <p>You are joined</p>
+        break;
+}
+<br />
+
+
+<h3>Players:</h3>
+<ul>
+    @foreach (var player in Players)
+    {
+        <li>Player @player</li>
+    }
+</ul>
+
+@if (Query != "")
+{
+    <h3>Query:</h3>
+    <p>@Query</p>
+    <input type="text" @bind="Answer" />
+    <button class="btn btn-primary" @onclick="AnswerQuestion">Answer</button>
+}
+
+@if (GameEnded)
+{
+    <h3>Game end!</h3>
+    <p>You got @CorrectAnswers correct answers.</p>
+    <p>You got position @Position</p>
+}
+
+@code {
+
+    enum PlayerStatus
+    {
+        none,
+        guest,
+        host
+    }
+
+    private string Query { get; set; } = "";
+    private string Name { get; set; }
+    private string Answer { get; set; } = "";
+    private int Position { get; set; }
+    private int CorrectAnswers { get; set; }
+    private bool GameEnded { get; set; } = false;
+
+    private PlayerStatus CurrentPlayerStatus { get; set; } = PlayerStatus.none;
+    private IReadOnlyList<string> Players = new List<string>();
+
+    private async Task AddPlayer()
+    {
+        var proxy = await wampService.GetProxy<IArgumentsService>();
+        Players = (await proxy.GetPlayers()).ToList();
+
+        await wampService.Subscribe<IEnumerable<string>>("com.publish.players", NewPlayersEvent);
+        await wampService.Subscribe<string>("com.publish.query", NewQueryEvent);
+        await wampService.Subscribe<IEnumerable<Player>>("com.publish.result", EndResult);
+
+
+        Console.WriteLine("Join done");
+
+        await proxy.AddPlayer(Name);
+        CurrentPlayerStatus = PlayerStatus.guest;
+    }
+
+    private void EndResult(IEnumerable<Player> players)
+    {
+        var player = players.SingleOrDefault(p => p.Name == Name);
+        Position = player?.Position ?? 0;
+        CorrectAnswers = player?.CorrectAnswers ?? 0;
+        Query = "";
+        GameEnded = true;
+        StateHasChanged();
+    }
+
+    private async Task SetHost()
+    {
+        await blazorQuizServer.Execute();
+        Console.WriteLine("Server started");
+        await AddPlayer();
+        CurrentPlayerStatus = PlayerStatus.host;
+    }
+
+    private void NewQueryEvent(string query)
+    {
+        Query = query;
+        StateHasChanged();
+    }
+
+    private async Task AnswerQuestion()
+    {
+        Console.WriteLine($"Answer: {Answer}");
+        var proxy = await wampService.GetProxy<IArgumentsService>();
+        await proxy.Answer(Name, Answer);
+        Answer = "";
+    }
+
+    private void NewPlayersEvent(IEnumerable<string> players)
+    {
+        Players = players.ToList();
+        Console.WriteLine($"Players fetched {Players.Count}");
+        StateHasChanged();
+    }
+
+    private async Task StartGame()
+    {
+        var proxy = await wampService.GetProxy<IArgumentsService>();
+        await proxy.StartQuiz();
+    }
+}
+
